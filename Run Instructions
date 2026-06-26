@@ -1,0 +1,85 @@
+## Run Instructions
+
+### Prerequisites
+- Python 3.10+
+- [Ollama](https://ollama.com/download) installed on your machine
+
+---
+
+### Step 1 — Install Ollama
+
+```bash
+# macOS
+brew install ollama
+
+# Linux
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Windows
+# Download from https://ollama.com/download
+```
+
+---
+
+### Step 2 — Pull the AI model
+
+```bash
+ollama pull llama3.2:3b
+```
+
+---
+
+### Step 3 — Clone the repository
+
+```bash
+git clone https://github.com/shaunakmirajgaonkar/finsight-ai.git
+cd finsight-ai
+```
+
+---
+
+### Step 4 — Create virtual environment
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+---
+
+### Step 5 — Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+### Step 6 — Configure environment
+
+```bash
+cp .env.example .env
+```
+
+---
+
+### Step 7 — Run (3 terminals)
+
+**Terminal 1 — Ollama**
+```bash
+ollama serve
+```
+
+**Terminal 2 — Backend**
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+**Terminal 3 — Frontend**
+```bash
+streamlit run streamlit_app.py
+```
+
+---
+
+### Step 8 — Open browser
