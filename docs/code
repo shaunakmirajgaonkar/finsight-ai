@@ -1,0 +1,1037 @@
+"""
+FinSight AI — Complete UI with PDF Export
+==========================================
+Run:
+    uvicorn app.main:app --reload --port 8000
+    streamlit run streamlit_app.py
+"""
+
+import io
+import streamlit as st
+import requests
+from datetime import datetime
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib import colors
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer,
+    Table, TableStyle, HRFlowable, KeepTogether
+)
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+
+# ─────────────────────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────────────────────
+API_BASE = "http://localhost:8000"
+DOC_TYPES = ["annual_report", "earnings_transcript", "10k", "10q", "other"]
+DOC_TYPE_LABELS = {
+    "annual_report":       "Annual Report",
+    "earnings_transcript": "Earnings Transcript",
+    "10k":                 "10-K Filing",
+    "10q":                 "10-Q Filing",
+    "other":               "Other",
+}
+DOC_TYPE_ICONS = {
+    "annual_report": "AR", "earnings_transcript": "EC",
+    "10k": "10K", "10q": "10Q", "other": "DOC",
+}
+SENTIMENT_COLOR = {
+    "bullish": ("#10B981", "#052e16", "BULLISH"),
+    "neutral": ("#F59E0B", "#1c1107", "NEUTRAL"),
+    "bearish": ("#EF4444", "#2d0707", "BEARISH"),
+}
+RATING_COLOR = {
+    "BUY":  ("#10B981", "#052e16"),
+    "HOLD": ("#F59E0B", "#1c1107"),
+    "SELL": ("#EF4444", "#2d0707"),
+}
+SUGGESTIONS = [
+    "What was total revenue and YoY growth?",
+    "Summarise the biggest risk factors.",
+    "What is management's outlook and guidance?",
+    "What drove gross margin changes this year?",
+    "How is the company positioned vs competitors?",
+    "What is the free cash flow and capital allocation?",
+]
+
+# ─────────────────────────────────────────────────────────────
+# PAGE CONFIG
+# ─────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="FinSight AI",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+section[data-testid="stSidebar"] {
+    background: #0B1120 !important;
+    border-right: 1px solid #1E2D4A;
+    padding-top: 0 !important;
+}
+section[data-testid="stSidebar"] > div { padding-top: 0 !important; }
+section[data-testid="stSidebar"] * { color: #CBD5E1 !important; }
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3 { color: #F1F5F9 !important; }
+section[data-testid="stSidebar"] .stButton > button {
+    background: transparent !important;
+    border: 1px solid #1E2D4A !important;
+    color: #94A3B8 !important;
+    border-radius: 6px !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    padding: 6px 12px !important;
+    width: 100% !important;
+    text-align: left !important;
+}
+section[data-testid="stSidebar"] .stButton > button:hover {
+    background: #1E2D4A !important;
+    border-color: #2563EB !important;
+    color: #F1F5F9 !important;
+}
+section[data-testid="stSidebar"] .stTextInput input,
+section[data-testid="stSidebar"] .stSelectbox select,
+section[data-testid="stSidebar"] .stNumberInput input {
+    background: #0F1A2E !important;
+    border: 1px solid #1E2D4A !important;
+    color: #F1F5F9 !important;
+    border-radius: 6px !important;
+    font-size: 13px !important;
+}
+section[data-testid="stSidebar"] .stFormSubmitButton > button {
+    background: #2563EB !important;
+    border: none !important;
+    color: white !important;
+    border-radius: 6px !important;
+    font-weight: 600 !important;
+    font-size: 13px !important;
+    width: 100% !important;
+}
+section[data-testid="stSidebar"] .stFormSubmitButton > button:hover {
+    background: #1D4ED8 !important;
+}
+.main .block-container { padding: 0 !important; max-width: 100% !important; }
+.terminal-bar {
+    background: #0B1120; border-bottom: 1px solid #1E2D4A;
+    padding: 10px 28px; display: flex; align-items: center; gap: 32px;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: #475569; letter-spacing: 0.05em;
+}
+.terminal-bar .brand { color: #2563EB; font-weight: 500; font-size: 12px; letter-spacing: 0.1em; flex-shrink: 0; }
+.terminal-bar .stat { display: flex; gap: 6px; align-items: center; }
+.terminal-bar .stat-label { color: #334155; }
+.terminal-bar .stat-value { color: #94A3B8; }
+.terminal-bar .stat-value.active { color: #10B981; }
+.terminal-bar .divider { width: 1px; height: 14px; background: #1E2D4A; flex-shrink: 0; }
+.terminal-bar .spacer { flex: 1; }
+.terminal-bar .status-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #10B981; box-shadow: 0 0 6px #10B981; flex-shrink: 0;
+}
+.page-header { padding: 24px 28px 0; border-bottom: 1px solid #F1F5F9; background: white; }
+.page-header h1 { font-size: 22px !important; font-weight: 700 !important; color: #0B1120 !important; letter-spacing: -0.03em !important; margin: 0 !important; padding: 0 !important; }
+.page-header p { font-size: 13px; color: #64748B; margin: 4px 0 0 !important; }
+.stTabs [data-baseweb="tab-list"] { background: white !important; border-bottom: 1px solid #E2E8F0 !important; padding: 0 28px !important; gap: 0 !important; }
+.stTabs [data-baseweb="tab"] { font-size: 13px !important; font-weight: 500 !important; color: #64748B !important; padding: 12px 16px !important; border-bottom: 2px solid transparent !important; border-radius: 0 !important; background: transparent !important; }
+.stTabs [aria-selected="true"] { color: #0B1120 !important; border-bottom-color: #2563EB !important; background: transparent !important; }
+.stTabs [data-baseweb="tab-panel"] { padding: 24px 28px !important; background: #F8FAFC !important; min-height: calc(100vh - 200px) !important; }
+.context-banner { background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 8px; padding: 10px 16px; display: flex; align-items: center; gap: 10px; margin-bottom: 20px; font-size: 13px; color: #1D4ED8; font-weight: 500; }
+.doc-tag { background: #DBEAFE; color: #1E40AF; border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 600; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.03em; }
+.msg-row-user { display: flex; justify-content: flex-end; margin: 12px 0; }
+.msg-row-ai { display: flex; justify-content: flex-start; margin: 12px 0; gap: 10px; align-items: flex-start; }
+.ai-avatar { width: 28px; height: 28px; background: #0B1120; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 500; color: #2563EB; flex-shrink: 0; margin-top: 2px; }
+.bubble-user { background: #2563EB; color: white; border-radius: 16px 16px 4px 16px; padding: 12px 16px; max-width: 70%; font-size: 14px; line-height: 1.5; box-shadow: 0 1px 3px rgba(37,99,235,0.3); }
+.bubble-ai { background: white; color: #1E293B; border-radius: 4px 16px 16px 16px; padding: 14px 18px; max-width: 75%; font-size: 14px; line-height: 1.6; border: 1px solid #E2E8F0; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+.signal-badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 6px; margin-top: 10px; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; }
+.sentiment-pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; }
+.metric-card { background: white; border: 1px solid #E2E8F0; border-radius: 8px; padding: 16px 20px; }
+.metric-card .label { font-size: 11px; color: #94A3B8; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px; }
+.metric-card .value { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 500; color: #0B1120; }
+.metric-card .delta { font-family: 'JetBrains Mono', monospace; font-size: 11px; margin-top: 4px; }
+.delta-up { color: #10B981; }
+.delta-dn { color: #EF4444; }
+.stTextInput input { border: 1px solid #E2E8F0 !important; border-radius: 8px !important; font-size: 14px !important; padding: 10px 14px !important; background: white !important; color: #0B1120 !important; }
+.stTextInput input:focus { border-color: #2563EB !important; box-shadow: 0 0 0 3px rgba(37,99,235,0.12) !important; }
+.stFormSubmitButton > button { background: #2563EB !important; border: none !important; color: white !important; border-radius: 8px !important; font-weight: 600 !important; font-size: 13px !important; padding: 10px 20px !important; }
+.stFormSubmitButton > button:hover { background: #1D4ED8 !important; }
+.stButton > button { border-radius: 6px !important; font-size: 13px !important; font-weight: 500 !important; }
+.empty-state { text-align: center; padding: 60px 20px; color: #94A3B8; }
+.empty-state .icon { font-size: 40px; margin-bottom: 16px; }
+.empty-state h3 { color: #475569; font-size: 16px; margin-bottom: 8px; }
+.empty-state p { font-size: 13px; max-width: 320px; margin: 0 auto; }
+.stAlert { border-radius: 8px !important; font-size: 13px !important; border: none !important; }
+hr { border-color: #E2E8F0 !important; margin: 16px 0 !important; }
+#MainMenu, footer, header { visibility: hidden !important; }
+.stDeployButton { display: none !important; }
+.export-bar { background: white; border: 1px solid #E2E8F0; border-radius: 8px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; margin-top: 16px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────
+# SESSION STATE
+# ─────────────────────────────────────────────────────────────
+for k, v in {
+    "history": [], "selected_docs": [],
+    "documents": [], "chip_text": "",
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ─────────────────────────────────────────────────────────────
+# PDF EXPORT
+# ─────────────────────────────────────────────────────────────
+def generate_chat_pdf(history, documents, selected_doc_ids):
+    buf   = io.BytesIO()
+    W, H  = A4
+    MRG   = 20 * mm
+    NAVY  = colors.HexColor("#0B1120")
+    BLUE  = colors.HexColor("#2563EB")
+    LBLUE = colors.HexColor("#EFF6FF")
+    SLATE = colors.HexColor("#64748B")
+    LGREY = colors.HexColor("#F8FAFC")
+    BORD  = colors.HexColor("#E2E8F0")
+    GREEN = colors.HexColor("#10B981")
+    AMBER = colors.HexColor("#F59E0B")
+    RED   = colors.HexColor("#EF4444")
+    WHITE = colors.white
+    BLACK = colors.HexColor("#1E293B")
+
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+        leftMargin=MRG, rightMargin=MRG,
+        topMargin=MRG, bottomMargin=20*mm,
+        title="FinSight AI Report", author="FinSight AI")
+
+    story = []
+    now   = datetime.now().strftime("%B %d, %Y  %H:%M")
+
+    # ── Header ──
+    hdr = Table([[
+        Paragraph("FINSIGHT//AI", ParagraphStyle("logo",
+            fontName="Helvetica-Bold", fontSize=14,
+            textColor=BLUE, charSpace=2)),
+        Paragraph(f"Generated: {now}", ParagraphStyle("ts",
+            fontName="Helvetica", fontSize=9,
+            textColor=SLATE, alignment=TA_RIGHT)),
+    ]], colWidths=[W-2*MRG-60*mm, 60*mm])
+    hdr.setStyle(TableStyle([
+        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("LINEBELOW",(0,0),(-1,-1),0.5,BORD),
+        ("BOTTOMPADDING",(0,0),(-1,-1),10),
+    ]))
+    story.append(hdr)
+    story.append(Spacer(1, 6*mm))
+
+    story.append(Paragraph("Financial Analysis Report",
+        ParagraphStyle("title", fontName="Helvetica-Bold",
+            fontSize=20, textColor=NAVY, leading=26, spaceAfter=4)))
+    story.append(Paragraph(
+        "AI-generated insights from financial document analysis",
+        ParagraphStyle("sub", fontName="Helvetica",
+            fontSize=10, textColor=SLATE, leading=14)))
+    story.append(Spacer(1, 5*mm))
+
+    # ── Documents table ──
+    active = [d for d in documents if d["id"] in selected_doc_ids]
+    if active:
+        rows = [["Company","Year","Type","Pages","Sentiment"]]
+        for d in active:
+            rows.append([
+                d.get("company","—"), str(d.get("year","—")),
+                d.get("doc_type","—").replace("_"," ").title(),
+                str(d.get("page_count","—")),
+                d.get("sentiment_label","—").capitalize(),
+            ])
+        dt = Table(rows, colWidths=[55*mm,18*mm,42*mm,18*mm,30*mm])
+        dt.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(-1,0),NAVY),
+            ("TEXTCOLOR",(0,0),(-1,0),WHITE),
+            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+            ("FONTSIZE",(0,0),(-1,0),8),
+            ("FONTNAME",(0,1),(-1,-1),"Helvetica"),
+            ("FONTSIZE",(0,1),(-1,-1),9),
+            ("TEXTCOLOR",(0,1),(-1,-1),BLACK),
+            ("GRID",(0,0),(-1,-1),0.4,BORD),
+            ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LGREY]),
+            ("TOPPADDING",(0,0),(-1,-1),5),
+            ("BOTTOMPADDING",(0,0),(-1,-1),5),
+            ("LEFTPADDING",(0,0),(-1,-1),8),
+            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ]))
+        story.append(dt)
+        story.append(Spacer(1, 4*mm))
+
+    # ── Stats bar ──
+    pairs_all = []
+    i = 0
+    while i < len(history):
+        if (history[i]["role"] == "user" and
+                i+1 < len(history) and
+                history[i+1]["role"] == "assistant"):
+            pairs_all.append((history[i]["content"], history[i+1]))
+            i += 2
+        else:
+            i += 1
+
+    n_sig = sum(1 for _, a in pairs_all if a.get("recommendation"))
+    stats = Table([[
+        Paragraph(f"<b>{len(pairs_all)}</b>  Questions",
+            ParagraphStyle("st", fontName="Helvetica", fontSize=10, textColor=NAVY)),
+        Paragraph(f"<b>{n_sig}</b>  Signals Generated",
+            ParagraphStyle("st2", fontName="Helvetica", fontSize=10, textColor=NAVY)),
+        Paragraph(f"<b>{len(active)}</b>  Documents",
+            ParagraphStyle("st3", fontName="Helvetica", fontSize=10, textColor=NAVY)),
+    ]], colWidths=[(W-2*MRG)/3]*3)
+    stats.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,-1),LBLUE),
+        ("LINEBELOW",(0,0),(-1,-1),2,BLUE),
+        ("TOPPADDING",(0,0),(-1,-1),8),
+        ("BOTTOMPADDING",(0,0),(-1,-1),8),
+        ("LEFTPADDING",(0,0),(-1,-1),12),
+        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("ALIGN",(0,0),(-1,-1),"CENTER"),
+    ]))
+    story.append(stats)
+    story.append(Spacer(1, 8*mm))
+
+    # ── Q&A ──
+    story.append(Paragraph("ANALYSIS & RESPONSES",
+        ParagraphStyle("sl", fontName="Helvetica-Bold",
+            fontSize=7, textColor=SLATE, charSpace=1.5, spaceAfter=4)))
+    story.append(HRFlowable(width="100%", thickness=0.5,
+                             color=BORD, spaceAfter=4*mm))
+
+    for idx, (question, amsg) in enumerate(pairs_all, 1):
+        block = []
+
+        # Question bubble
+        qt = Table([[
+            Paragraph(f"Q{idx}", ParagraphStyle("qn",
+                fontName="Helvetica-Bold", fontSize=8,
+                textColor=BLUE, leading=11)),
+            Paragraph(question, ParagraphStyle("q",
+                fontName="Helvetica-Bold", fontSize=11,
+                textColor=WHITE, leading=16)),
+        ]], colWidths=[10*mm, W-2*MRG-10*mm])
+        qt.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(-1,-1),NAVY),
+            ("TOPPADDING",(0,0),(-1,-1),10),
+            ("BOTTOMPADDING",(0,0),(-1,-1),10),
+            ("LEFTPADDING",(0,0),(0,-1),10),
+            ("LEFTPADDING",(1,0),(1,-1),6),
+            ("RIGHTPADDING",(0,0),(-1,-1),12),
+            ("VALIGN",(0,0),(-1,-1),"TOP"),
+        ]))
+        block.append(qt)
+        block.append(Spacer(1, 2*mm))
+
+        # Answer bubble
+        content = (amsg.get("content","")
+            .replace("&","&amp;")
+            .replace("<","&lt;")
+            .replace(">","&gt;")
+            .replace("\n","<br/>"))
+        at = Table([[Paragraph(content,
+            ParagraphStyle("a", fontName="Helvetica",
+                fontSize=10, textColor=BLACK, leading=15))]],
+            colWidths=[W-2*MRG])
+        at.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(-1,-1),WHITE),
+            ("BOX",(0,0),(-1,-1),0.5,BORD),
+            ("TOPPADDING",(0,0),(-1,-1),10),
+            ("BOTTOMPADDING",(0,0),(-1,-1),10),
+            ("LEFTPADDING",(0,0),(-1,-1),12),
+            ("RIGHTPADDING",(0,0),(-1,-1),12),
+        ]))
+        block.append(at)
+
+        # Sources
+        srcs = amsg.get("sources", [])
+        if srcs:
+            block.append(Spacer(1, 2*mm))
+            src_rows = [["#","Document","Page","Match","Excerpt"]]
+            for n, src in enumerate(srcs[:4], 1):
+                dname = next(
+                    (f"{d['company']} {d['year']}"
+                     for d in documents if d["id"] == src["doc_id"]),
+                    src["doc_id"][:10])
+                exc = src["text"][:100].replace("\n"," ")
+                if len(src["text"]) > 100:
+                    exc += "…"
+                src_rows.append([str(n), dname, str(src["page"]),
+                    f"{src['relevance_score']:.0%}", exc])
+            st_src = Table(src_rows,
+                colWidths=[8*mm,35*mm,12*mm,14*mm,W-2*MRG-69*mm])
+            st_src.setStyle(TableStyle([
+                ("BACKGROUND",(0,0),(-1,0),LBLUE),
+                ("TEXTCOLOR",(0,0),(-1,0),BLUE),
+                ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+                ("FONTSIZE",(0,0),(-1,0),7),
+                ("FONTNAME",(0,1),(-1,-1),"Helvetica"),
+                ("FONTSIZE",(0,1),(-1,-1),8),
+                ("TEXTCOLOR",(0,1),(-1,-1),SLATE),
+                ("GRID",(0,0),(-1,-1),0.3,BORD),
+                ("TOPPADDING",(0,0),(-1,-1),4),
+                ("BOTTOMPADDING",(0,0),(-1,-1),4),
+                ("LEFTPADDING",(0,0),(-1,-1),6),
+                ("VALIGN",(0,0),(-1,-1),"TOP"),
+            ]))
+            block.append(st_src)
+
+        # Signal
+        rec = amsg.get("recommendation")
+        if rec:
+            block.append(Spacer(1, 2*mm))
+            rating = rec.get("rating","HOLD")
+            conf   = rec.get("confidence", 0.5)
+            sc = {"BUY":GREEN,"HOLD":AMBER,"SELL":RED}.get(rating, SLATE)
+            sb = {"BUY":  colors.HexColor("#ECFDF5"),
+                  "HOLD": colors.HexColor("#FFFBEB"),
+                  "SELL": colors.HexColor("#FEF2F2")}.get(rating, LGREY)
+            sig = Table([[
+                Paragraph(f"<b>{rating}</b>  ·  {int(conf*100)}% confidence",
+                    ParagraphStyle("sig", fontName="Helvetica-Bold",
+                        fontSize=11, textColor=sc)),
+                Paragraph(rec.get("rationale",""),
+                    ParagraphStyle("rat", fontName="Helvetica-Oblique",
+                        fontSize=9, textColor=SLATE, leading=13)),
+            ]], colWidths=[50*mm, W-2*MRG-50*mm])
+            sig.setStyle(TableStyle([
+                ("BACKGROUND",(0,0),(-1,-1),sb),
+                ("LINEBELOW",(0,0),(-1,-1),2,sc),
+                ("TOPPADDING",(0,0),(-1,-1),8),
+                ("BOTTOMPADDING",(0,0),(-1,-1),8),
+                ("LEFTPADDING",(0,0),(-1,-1),10),
+                ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+            ]))
+            block.append(sig)
+
+        block.append(Spacer(1, 6*mm))
+        story.append(KeepTogether(block))
+
+    # ── Footer ──
+    story.append(HRFlowable(width="100%", thickness=0.5,
+                             color=BORD, spaceBefore=4*mm, spaceAfter=3*mm))
+    story.append(Paragraph(
+        f"Generated by FinSight AI · {now} · "
+        "For informational purposes only. Not financial advice.",
+        ParagraphStyle("ft", fontName="Helvetica", fontSize=8,
+                        textColor=SLATE, alignment=TA_CENTER)))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf.read()
+
+
+# ─────────────────────────────────────────────────────────────
+# API HELPERS
+# ─────────────────────────────────────────────────────────────
+def api_get(path):
+    try:
+        r = requests.get(f"{API_BASE}{path}", timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except requests.ConnectionError:
+        st.error("Backend offline — run: `uvicorn app.main:app --reload --port 8000`")
+    except Exception as e:
+        st.error(f"Error: {e}")
+    return None
+
+def api_post(path, json_data=None, files=None, data=None, timeout=120):
+    try:
+        r = requests.post(f"{API_BASE}{path}", json=json_data,
+                          files=files, data=data, timeout=timeout)
+        r.raise_for_status()
+        return r.json()
+    except requests.ConnectionError:
+        st.error("Backend offline.")
+    except requests.HTTPError as e:
+        try:
+            detail = e.response.json().get("detail", str(e))
+        except Exception:
+            detail = str(e)
+        st.error(f"API error: {detail}")
+    except Exception as e:
+        st.error(f"Request failed: {e}")
+    return None
+
+def api_delete(path):
+    try:
+        requests.delete(f"{API_BASE}{path}", timeout=10).raise_for_status()
+        return True
+    except Exception:
+        return False
+
+def refresh_docs():
+    docs = api_get("/api/documents/")
+    if docs is not None:
+        st.session_state.documents = docs
+
+def sentiment_pill(label):
+    color, bg, text = SENTIMENT_COLOR.get(
+        label, ("#94A3B8", "#1e293b", label.upper()))
+    return (f'<span class="sentiment-pill" '
+            f'style="background:{bg};color:{color};border:1px solid {color}22;">'
+            f'{text}</span>')
+
+def signal_badge(rating, confidence):
+    color, bg = RATING_COLOR.get(rating, ("#94A3B8", "#1e293b"))
+    return (f'<div class="signal-badge" style="background:{bg};border:1px solid {color}33;">'
+            f'<span class="rating" style="color:{color};">{rating}</span>'
+            f'<span class="conf" style="color:{color};">'
+            f'{int(confidence * 100)}% confidence</span></div>')
+
+def doc_type_badge(doc_type):
+    return DOC_TYPE_ICONS.get(doc_type, "DOC")
+
+
+# ─────────────────────────────────────────────────────────────
+# SIDEBAR
+# ─────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("""
+    <div style="padding:20px 16px 16px;border-bottom:1px solid #1E2D4A;margin-bottom:16px;">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:13px;
+                    font-weight:500;color:#2563EB;letter-spacing:0.1em;">
+            FINSIGHT//AI
+        </div>
+        <div style="font-size:11px;color:#334155;margin-top:3px;letter-spacing:0.03em;">
+            Financial Document Intelligence
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown(
+        '<div style="font-size:10px;font-weight:600;color:#334155;'
+        'letter-spacing:0.1em;text-transform:uppercase;margin-bottom:10px;">'
+        'Upload Document</div>', unsafe_allow_html=True)
+
+    uploaded = st.file_uploader("file", type=["pdf","docx","doc"],
+                                label_visibility="collapsed")
+    if uploaded:
+        with st.form("upload_form", clear_on_submit=True):
+            company  = st.text_input("Company", placeholder="e.g. Apple Inc.")
+            year     = st.number_input("Fiscal Year", 2000, 2030, 2024, step=1)
+            doc_type = st.selectbox("Type", DOC_TYPES,
+                                    format_func=lambda x: DOC_TYPE_LABELS[x])
+            do_upload = st.form_submit_button("⬆  Process Document",
+                                              use_container_width=True)
+        if do_upload:
+            if not company.strip():
+                st.warning("Enter a company name.")
+            else:
+                with st.spinner("Parsing · Embedding · Analysing…"):
+                    res = api_post(
+                        "/api/documents/upload",
+                        files={"file": (uploaded.name, uploaded.getvalue(),
+                                        uploaded.type or "application/octet-stream")},
+                        data={"company": company, "year": str(int(year)),
+                              "doc_type": doc_type},
+                        timeout=180,
+                    )
+                if res:
+                    m = res["meta"]
+                    st.success(f"Processed {m.get('page_count','?')} pages → "
+                               f"{m.get('chunk_count','?')} chunks")
+                    refresh_docs()
+
+    st.markdown('<div style="height:16px;"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div style="font-size:10px;font-weight:600;color:#334155;'
+        'letter-spacing:0.1em;text-transform:uppercase;margin-bottom:10px;">'
+        'Documents</div>', unsafe_allow_html=True)
+
+    if st.button("Refresh", use_container_width=True):
+        refresh_docs()
+
+    if not st.session_state.documents:
+        refresh_docs()
+
+    if st.session_state.documents:
+        for doc in st.session_state.documents:
+            did    = doc["id"]
+            is_sel = did in st.session_state.selected_docs
+            lbl    = doc.get("sentiment_label","neutral")
+            s_color= SENTIMENT_COLOR.get(lbl,("#94A3B8","#1e293b","—"))[0]
+            badge  = doc_type_badge(doc["doc_type"])
+            st.markdown(f"""
+            <div style="background:{'#0F1A2E' if is_sel else 'transparent'};
+                border:1px solid {'#2563EB' if is_sel else '#1E2D4A'};
+                border-radius:6px;padding:10px 12px;margin-bottom:6px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                    <span style="background:#1E2D4A;color:#64748B;
+                        font-family:'JetBrains Mono',monospace;font-size:9px;
+                        font-weight:600;padding:2px 6px;border-radius:3px;">
+                        {badge}</span>
+                    <span style="color:#F1F5F9;font-size:13px;font-weight:500;">
+                        {doc['company']}</span>
+                    <span style="color:#475569;font-size:12px;">{doc['year']}</span>
+                    <span style="margin-left:auto;color:{s_color};
+                        font-family:'JetBrains Mono',monospace;
+                        font-size:9px;font-weight:600;">{lbl.upper()[:4]}</span>
+                </div>
+                <div style="color:#475569;font-size:11px;
+                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                    {doc['filename'][:35]}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            c1, c2 = st.columns([3,1])
+            with c1:
+                lbl_btn = "— Deselect" if is_sel else "+ Select"
+                if st.button(lbl_btn, key=f"sel_{did}", use_container_width=True):
+                    if is_sel:
+                        st.session_state.selected_docs.remove(did)
+                    else:
+                        st.session_state.selected_docs.append(did)
+                    st.rerun()
+            with c2:
+                if st.button("✕", key=f"del_{did}", use_container_width=True):
+                    if api_delete(f"/api/documents/{did}"):
+                        st.session_state.selected_docs = [
+                            x for x in st.session_state.selected_docs if x != did]
+                        refresh_docs()
+                        st.rerun()
+    else:
+        st.markdown(
+            '<div style="color:#334155;font-size:12px;padding:12px 0;">'
+            'No documents yet. Upload one above.</div>',
+            unsafe_allow_html=True)
+
+    n_docs = len(st.session_state.documents)
+    n_sel  = len(st.session_state.selected_docs)
+    st.markdown(f"""
+    <div style="position:fixed;bottom:0;width:220px;background:#0B1120;
+                border-top:1px solid #1E2D4A;padding:10px 16px;
+                font-family:'JetBrains Mono',monospace;font-size:10px;color:#334155;">
+        <span style="color:#10B981;">●</span>
+        &nbsp;{n_docs} docs &nbsp;·&nbsp; {n_sel} selected
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────
+# TERMINAL BAR
+# ─────────────────────────────────────────────────────────────
+n_docs = len(st.session_state.documents)
+n_sel  = len(st.session_state.selected_docs)
+n_msgs = len(st.session_state.history)
+
+st.markdown(f"""
+<div class="terminal-bar">
+    <span class="brand">FINSIGHT//AI</span>
+    <span class="divider"></span>
+    <span class="stat">
+        <span class="stat-label">DOCS</span>
+        <span class="stat-value {'active' if n_docs else ''}">{n_docs:02d}</span>
+    </span>
+    <span class="stat">
+        <span class="stat-label">ACTIVE</span>
+        <span class="stat-value {'active' if n_sel else ''}">{n_sel:02d}</span>
+    </span>
+    <span class="stat">
+        <span class="stat-label">QUERIES</span>
+        <span class="stat-value">{n_msgs // 2:02d}</span>
+    </span>
+    <span class="divider"></span>
+    <span class="stat">
+        <span class="stat-label">ENGINE</span>
+        <span class="stat-value active">OLLAMA·LOCAL</span>
+    </span>
+    <span class="stat">
+        <span class="stat-label">EMBED</span>
+        <span class="stat-value">MINILM·L6</span>
+    </span>
+    <span class="spacer"></span>
+    <span class="status-dot"></span>
+    <span class="stat-value active">LIVE</span>
+</div>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────
+# PAGE HEADER
+# ─────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="page-header">
+    <h1>Financial Document Intelligence</h1>
+    <p>Upload annual reports, 10-K filings, and earnings transcripts — then ask anything.</p>
+</div>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────
+# TABS
+# ─────────────────────────────────────────────────────────────
+tab_chat, tab_summary, tab_compare, tab_docs = st.tabs(
+    ["  Chat  ", "  Summary  ", "  Compare  ", "  Documents  "]
+)
+
+# ═════════════════════════════════════════════════════════════
+# TAB 1 — CHAT
+# ═════════════════════════════════════════════════════════════
+with tab_chat:
+    if not st.session_state.selected_docs:
+        st.markdown("""
+        <div class="empty-state">
+            <div class="icon">📂</div>
+            <h3>No documents selected</h3>
+            <p>Select one or more documents from the sidebar to start your analysis.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        # Context banner
+        tags = ""
+        for doc in st.session_state.documents:
+            if doc["id"] in st.session_state.selected_docs:
+                tags += f'<span class="doc-tag">{doc["company"]} {doc["year"]}</span>'
+        st.markdown(f"""
+        <div class="context-banner">
+            <span>📎 Analysing</span>
+            <div class="doc-tags">{tags}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Suggestion chips
+        cols = st.columns(3)
+        for idx, q in enumerate(SUGGESTIONS):
+            with cols[idx % 3]:
+                if st.button(q, key=f"chip_{idx}", use_container_width=True):
+                    st.session_state.chip_text = q
+
+        st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
+
+        # Input form
+        col_form, col_rec = st.columns([5, 1])
+        with col_rec:
+            include_rec = st.checkbox("Signal", value=True,
+                                      help="Include BUY/HOLD/SELL signal")
+
+        with st.form("chat_form", clear_on_submit=True):
+            col_inp, col_btn = st.columns([6, 1])
+            with col_inp:
+                user_input = st.text_input(
+                    "q", value=st.session_state.chip_text,
+                    placeholder="Ask anything about this document…",
+                    label_visibility="collapsed",
+                )
+            with col_btn:
+                submitted = st.form_submit_button(
+                    "Send", use_container_width=True, type="primary")
+
+        if st.session_state.chip_text and not submitted:
+            st.session_state.chip_text = ""
+
+        # API call — fires ONCE per form submit
+        if submitted:
+            q = user_input.strip()
+            if q:
+                st.session_state.history.append({"role": "user", "content": q})
+                with st.spinner("Retrieving context · Generating response…"):
+                    res = api_post("/api/chat", json_data={
+                        "question": q,
+                        "doc_ids":  st.session_state.selected_docs,
+                        "include_recommendation": include_rec,
+                    })
+                if res:
+                    st.session_state.history.append({
+                        "role":           "assistant",
+                        "content":        res.get("answer", ""),
+                        "sources":        res.get("sources", []),
+                        "recommendation": res.get("recommendation"),
+                    })
+                else:
+                    st.session_state.history.append({
+                        "role":    "assistant",
+                        "content": "Unable to get a response. Check the backend is running.",
+                        "sources": [],
+                    })
+
+        # Chat history
+        if not st.session_state.history:
+            st.markdown("""
+            <div style="text-align:center;padding:40px 0;color:#94A3B8;font-size:13px;">
+                Your conversation will appear here.
+            </div>
+            """, unsafe_allow_html=True)
+
+        for msg in st.session_state.history:
+            if msg["role"] == "user":
+                st.markdown(
+                    f'<div class="msg-row-user">'
+                    f'<div class="bubble-user">{msg["content"]}</div></div>',
+                    unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    f'<div class="msg-row-ai">'
+                    f'<div class="ai-avatar">AI</div>'
+                    f'<div class="bubble-ai">{msg["content"]}</div></div>',
+                    unsafe_allow_html=True)
+                srcs = msg.get("sources", [])
+                if srcs:
+                    with st.expander(f"  {len(srcs)} source excerpt(s)", expanded=False):
+                        for n, src in enumerate(srcs, 1):
+                            name = next(
+                                (f"{d['company']} {d['year']}"
+                                 for d in st.session_state.documents
+                                 if d["id"] == src["doc_id"]),
+                                src["doc_id"][:8])
+                            st.markdown(
+                                f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+                                f'<span style="font-family:JetBrains Mono,monospace;font-size:11px;color:#64748B;">[{n}]</span>'
+                                f'<strong style="font-size:13px;">{name}</strong>'
+                                f'<span style="font-size:11px;color:#94A3B8;">Page {src["page"]} · {src["relevance_score"]:.0%} match</span></div>',
+                                unsafe_allow_html=True)
+                            st.caption(src["text"][:300] + ("…" if len(src["text"]) > 300 else ""))
+                            if n < len(srcs):
+                                st.divider()
+                rec = msg.get("recommendation")
+                if rec:
+                    st.markdown(signal_badge(rec["rating"], rec["confidence"]),
+                                unsafe_allow_html=True)
+                    if rec.get("rationale"):
+                        st.caption(rec["rationale"])
+
+        # ── Export & Clear ────────────────────────────────
+        if st.session_state.history:
+            st.markdown('<div style="height:12px;"></div>', unsafe_allow_html=True)
+            st.markdown("""
+            <div style="background:white;border:1px solid #E2E8F0;border-radius:8px;
+                        padding:14px 18px;margin-bottom:8px;">
+                <div style="font-size:13px;color:#475569;margin-bottom:10px;font-weight:500;">
+                    📄 Export conversation as PDF report
+                </div>
+            """, unsafe_allow_html=True)
+
+            exp_col1, exp_col2 = st.columns([3, 1])
+            with exp_col1:
+                st.caption("Includes all Q&A, source citations, and investment signals")
+            with exp_col2:
+                generate = st.button("Generate PDF",
+                                     type="primary", use_container_width=True)
+
+            if generate:
+                with st.spinner("Building PDF report…"):
+                    pdf_bytes = generate_chat_pdf(
+                        history=st.session_state.history,
+                        documents=st.session_state.documents,
+                        selected_doc_ids=st.session_state.selected_docs,
+                    )
+                st.download_button(
+                    label="⬇️  Download PDF Report",
+                    data=pdf_bytes,
+                    file_name=f"finsight_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            if st.button("Clear conversation", type="secondary"):
+                st.session_state.history = []
+                st.session_state.chip_text = ""
+                st.rerun()
+
+
+# ═════════════════════════════════════════════════════════════
+# TAB 2 — SUMMARY
+# ═════════════════════════════════════════════════════════════
+with tab_summary:
+    if not st.session_state.selected_docs:
+        st.markdown("""
+        <div class="empty-state">
+            <div class="icon">📝</div>
+            <h3>No documents selected</h3>
+            <p>Select a document from the sidebar to generate an executive summary.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        doc_opts = {
+            d["id"]: f"{d['company']} {d['year']} — {d['filename']}"
+            for d in st.session_state.documents
+            if d["id"] in st.session_state.selected_docs
+        }
+        chosen = st.selectbox("Document", list(doc_opts.keys()),
+                               format_func=lambda x: doc_opts[x],
+                               label_visibility="collapsed")
+
+        meta = next((d for d in st.session_state.documents if d["id"] == chosen), None)
+        if meta:
+            c1, c2, c3, c4 = st.columns(4)
+            lbl = meta.get("sentiment_label","neutral")
+            scr = meta.get("sentiment_score") or 0
+            for col, label, val, delta, dcls in [
+                (c1, "COMPANY", meta["company"], "", ""),
+                (c2, "YEAR", str(meta["year"]), "", ""),
+                (c3, "PAGES", str(meta.get("page_count","—")), "", ""),
+                (c4, "SENTIMENT", lbl.upper(), f"{scr:+.3f}",
+                 "delta-up" if scr > 0 else "delta-dn"),
+            ]:
+                col.markdown(f"""
+                <div class="metric-card">
+                    <div class="label">{label}</div>
+                    <div class="value">{val}</div>
+                    {f'<div class="delta {dcls}">{delta}</div>' if delta else ''}
+                </div>
+                """, unsafe_allow_html=True)
+            st.markdown('<div style="height:16px;"></div>', unsafe_allow_html=True)
+
+        if st.button("Generate Executive Summary", type="primary", use_container_width=True):
+            with st.spinner("Reading document · Generating summary…"):
+                res = api_post("/api/summary", json_data={"doc_id": chosen})
+            if res:
+                st.markdown("---")
+                lbl = res.get("sentiment_label", "neutral")
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">'
+                    f'<h3 style="margin:0;font-size:17px;color:#0B1120;">'
+                    f'{res["company"]} · FY{res["year"]}</h3>'
+                    f'{sentiment_pill(lbl)}</div>',
+                    unsafe_allow_html=True)
+                st.markdown(f"""
+                <div style="background:white;border:1px solid #E2E8F0;border-radius:8px;
+                            padding:24px;line-height:1.7;font-size:14px;color:#1E293B;">
+                {res["summary"].replace(chr(10), "<br>")}
+                </div>
+                """, unsafe_allow_html=True)
+
+
+# ═════════════════════════════════════════════════════════════
+# TAB 3 — COMPARE
+# ═════════════════════════════════════════════════════════════
+with tab_compare:
+    if len(st.session_state.selected_docs) < 2:
+        st.markdown("""
+        <div class="empty-state">
+            <div class="icon">⚖️</div>
+            <h3>Select two or more documents</h3>
+            <p>Check at least 2 documents in the sidebar to compare them side by side.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        names = [f"{d['company']} {d['year']}"
+                 for d in st.session_state.documents
+                 if d["id"] in st.session_state.selected_docs]
+        st.markdown(
+            f'<div class="context-banner">⚖️ Comparing: '
+            f'{"  vs  ".join(f"<strong>{n}</strong>" for n in names)}</div>',
+            unsafe_allow_html=True)
+        aspect = st.text_input(
+            "Comparison focus",
+            value="overall financial performance, revenue growth, and margins")
+        if st.button("Run Comparison", type="primary", use_container_width=True):
+            with st.spinner("Retrieving context · Comparing documents…"):
+                res = api_post("/api/compare", json_data={
+                    "doc_ids": st.session_state.selected_docs,
+                    "aspect":  aspect,
+                })
+            if res:
+                st.markdown("---")
+                st.markdown(f"""
+                <div style="background:white;border:1px solid #E2E8F0;border-radius:8px;
+                            padding:24px;line-height:1.7;font-size:14px;color:#1E293B;">
+                {res["comparison"].replace(chr(10), "<br>")}
+                </div>
+                """, unsafe_allow_html=True)
+                srcs = res.get("sources", [])
+                if srcs:
+                    with st.expander(f"  {len(srcs)} source(s) used"):
+                        for src in srcs:
+                            name = next(
+                                (f"{d['company']} {d['year']}"
+                                 for d in st.session_state.documents
+                                 if d["id"] == src["doc_id"]),
+                                src["doc_id"][:8])
+                            st.markdown(
+                                f"**{name} — Page {src['page']}** "
+                                f"*({src['relevance_score']:.0%} match)*")
+                            st.caption(src["text"][:200] + "…")
+
+
+# ═════════════════════════════════════════════════════════════
+# TAB 4 — DOCUMENTS
+# ═════════════════════════════════════════════════════════════
+with tab_docs:
+    col_title, col_refresh = st.columns([5, 1])
+    with col_title:
+        st.markdown(
+            '<div style="font-size:16px;font-weight:600;color:#0B1120;margin-bottom:16px;">'
+            'All Documents</div>', unsafe_allow_html=True)
+    with col_refresh:
+        if st.button("Refresh", use_container_width=True):
+            refresh_docs()
+
+    if not st.session_state.documents:
+        st.markdown("""
+        <div class="empty-state">
+            <div class="icon">📁</div>
+            <h3>No documents yet</h3>
+            <p>Upload a PDF or DOCX from the sidebar to get started.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        for doc in st.session_state.documents:
+            lbl    = doc.get("sentiment_label","neutral")
+            scr    = doc.get("sentiment_score") or 0
+            s_color= SENTIMENT_COLOR.get(lbl,("#94A3B8","#1e293b","—"))[0]
+            is_sel = doc["id"] in st.session_state.selected_docs
+            ts     = doc.get("uploaded_at","")[:10]
+
+            with st.expander(
+                f"{doc_type_badge(doc['doc_type'])}  ·  "
+                f"{doc['company']} {doc['year']}  ·  {doc['filename']}",
+                expanded=False):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.markdown(f"""
+                    <div style="font-size:12px;line-height:2;color:#64748B;">
+                        <strong style="color:#0B1120;">Type</strong><br>
+                        {DOC_TYPE_LABELS[doc['doc_type']]}<br>
+                        <strong style="color:#0B1120;">Pages</strong><br>
+                        {doc.get('page_count','—')}<br>
+                        <strong style="color:#0B1120;">Chunks</strong><br>
+                        {doc.get('chunk_count','—')}
+                    </div>""", unsafe_allow_html=True)
+                with c2:
+                    st.markdown(f"""
+                    <div style="font-size:12px;line-height:2;color:#64748B;">
+                        <strong style="color:#0B1120;">Sentiment</strong><br>
+                        <span style="color:{s_color};font-family:'JetBrains Mono',monospace;
+                                     font-weight:600;font-size:11px;">{lbl.upper()}</span>
+                        <span style="font-family:'JetBrains Mono',monospace;
+                                     font-size:11px;"> ({scr:+.3f})</span><br>
+                        <strong style="color:#0B1120;">Uploaded</strong><br>{ts}
+                    </div>""", unsafe_allow_html=True)
+                with c3:
+                    st.markdown(f"""
+                    <div style="font-size:11px;color:#94A3B8;
+                                font-family:'JetBrains Mono',monospace;word-break:break-all;">
+                        <strong style="color:#64748B;">ID</strong><br>{doc['id']}
+                    </div>""", unsafe_allow_html=True)
+
+                st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
+                bc1, bc2 = st.columns([3, 1])
+                with bc1:
+                    if st.button(
+                        "Deselect" if is_sel else "Select for analysis",
+                        key=f"tsel_{doc['id']}", use_container_width=True):
+                        if is_sel:
+                            st.session_state.selected_docs.remove(doc["id"])
+                        else:
+                            st.session_state.selected_docs.append(doc["id"])
+                        st.rerun()
+                with bc2:
+                    if st.button("Delete", key=f"tdel_{doc['id']}",
+                                 use_container_width=True):
+                        if api_delete(f"/api/documents/{doc['id']}"):
+                            st.session_state.selected_docs = [
+                                x for x in st.session_state.selected_docs
+                                if x != doc["id"]]
+                            refresh_docs()
+                            st.rerun()
