@@ -1,0 +1,37 @@
+# Core API
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+
+# Local LLM via Ollama
+ollama==0.3.3
+
+# Local embeddings
+sentence-transformers==3.1.1
+
+# Document parsing
+pymupdf==1.24.10
+pdfplumber==0.11.4
+python-docx==1.1.2
+
+# Vector store
+chromadb==0.5.15
+langchain-text-splitters==0.3.0
+
+# Sentiment analysis
+vaderSentiment==3.3.2
+
+# Data validation
+pydantic==2.9.2
+pydantic-settings==2.5.2
+
+# PDF export
+reportlab==4.2.2
+
+# Utilities
+python-dotenv==1.0.1
+aiofiles==24.1.0
+
+# Frontend
+streamlit==1.38.0
+requests==2.32.3
