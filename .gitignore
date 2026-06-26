@@ -1,0 +1,17 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+data/uploads/
+data/vectorstore/
+.env
+.DS_Store
+.vscode/
+.idea/
+*.log
+*.pt
+digit_dataset/
